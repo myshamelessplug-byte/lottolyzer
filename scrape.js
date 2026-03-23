@@ -11,7 +11,6 @@ async function scrapeData() {
     
     const page = await browser.newPage();
     
-    // Speed up loading
     await page.setRequestInterception(true);
     page.on('request', (req) => {
         if (['image', 'stylesheet', 'font'].includes(req.resourceType())) {
@@ -22,25 +21,23 @@ async function scrapeData() {
     });
 
     console.log('Navigating to site...');
-    // FIX: Corrected URL spelling
     await page.goto('https://www.lottong-pinoy.com/', { 
         waitUntil: 'domcontentloaded',
         timeout: 60000 
     });
 
     try {
-        // 1. Wait for hydration
+        // 1. Setup
         console.log('Waiting for page hydration...');
         await new Promise(r => setTimeout(r, 3000));
 
-        // 2. Force History section visibility
         console.log('Forcing History section visibility...');
         await page.evaluate(() => {
             const section = document.querySelector('#section-history');
             if (section) section.classList.remove('hidden');
         });
 
-        // 3. Select Game (e.g., 6/55)
+        // 2. Select Game
         console.log('Selecting game...');
         await page.evaluate(() => {
             const select = document.querySelector('#gameSelect');
@@ -53,45 +50,47 @@ async function scrapeData() {
             }
         });
 
-        // 4. Select "From" Date (Earliest Available)
+        // 3. Select Date Range (Earliest)
         console.log('Selecting date range...');
         await page.evaluate(() => {
-            // Set FROM Year to the last option (e.g., 2016)
             const fromYearSelect = document.querySelector('#fromYearSelect');
             const options = fromYearSelect.querySelectorAll('option');
             if (options.length > 0) {
-                const earliestYear = options[options.length - 1].value;
-                fromYearSelect.value = earliestYear;
+                // Select the last option (earliest year)
+                fromYearSelect.value = options[options.length - 1].value;
                 fromYearSelect.dispatchEvent(new Event('change', { bubbles: true }));
             }
-            
-            // Set FROM Month to January (value="0")
             const fromMonthSelect = document.querySelector('#fromMonthSelect');
-            fromMonthSelect.value = "0";
+            fromMonthSelect.value = "0"; // January
             fromMonthSelect.dispatchEvent(new Event('change', { bubbles: true }));
         });
 
-        // 5. Click Search
+        // 4. Initial Search
         console.log('Clicking Fetch Results...');
         await page.evaluate(() => document.querySelector('#searchBtn').click());
 
-        // 6. Wait for initial results
-        console.log('Waiting for initial results...');
         await page.waitForFunction(
             () => !document.querySelector('#tableBody').innerText.includes('Click "Fetch Results"'),
             { timeout: 20000 }
         );
         console.log('Initial results loaded.');
 
-        // 7. PAGINATION LOOP
+        // 5. Pagination Loop
         let allResults = [];
-        let hasNextPage = true;
-        let pageNum = 1;
+        let safetyCounter = 0;
+        const MAX_PAGES = 200; // Safety break: Stop after 200 pages
 
-        while (hasNextPage) {
-            console.log(`Scraping page ${pageNum}...`);
+        while (safetyCounter < MAX_PAGES) {
+            safetyCounter++;
             
-            // A. Extract Data on current page
+            // A. Get current page info for logging
+            const pageStatus = await page.evaluate(() => {
+                const info = document.querySelector('#pageInfo');
+                return info ? info.innerText : 'Unknown Page';
+            });
+            console.log(`Scraping ${pageStatus}...`);
+
+            // B. Extract Data
             const newResults = await page.evaluate(() => {
                 const container = document.querySelector('#tableBody');
                 const rows = container.children;
@@ -113,44 +112,61 @@ async function scrapeData() {
             });
 
             allResults.push(...newResults);
-            console.log(`Found ${newResults.length} rows. Total: ${allResults.length}`);
+            console.log(`Found ${newResults.length} rows. Total accumulated: ${allResults.length}`);
 
-            // B. Check if Next Page exists
-            const isDisabled = await page.evaluate(() => {
+            // C. Try to go to Next Page
+            const navigationResult = await page.evaluate(() => {
                 const nextBtn = document.querySelector('#nextBtn');
-                // Check if button is disabled
-                if (nextBtn.classList.contains('disabled') || nextBtn.hasAttribute('disabled')) return true;
-                
-                // Check Page Info text
                 const pageInfo = document.querySelector('#pageInfo');
-                if (pageInfo) {
-                    const text = pageInfo.innerText; // e.g., "Page 1 / 5"
-                    const parts = text.split('/');
-                    if (parts.length === 2) {
-                        const current = parseInt(parts[0].replace('Page', '').trim());
-                        const total = parseInt(parts[1].trim());
-                        return current >= total;
-                    }
+                
+                if (!nextBtn || !pageInfo) return { finished: true, reason: "Elements missing" };
+
+                // Check if we are on the last page
+                const text = pageInfo.innerText; // e.g., "Page 1 / 5"
+                const parts = text.split('/');
+                if (parts.length === 2) {
+                    const current = parseInt(parts[0].replace('Page', '').trim());
+                    const total = parseInt(parts[1].trim());
+                    if (current >= total) return { finished: true, reason: "Last page reached" };
                 }
-                return true; // Safety stop
+
+                // Check if button is disabled
+                if (nextBtn.classList.contains('disabled') || nextBtn.getAttribute('disabled')) {
+                    return { finished: true, reason: "Next button disabled" };
+                }
+
+                // Try clicking
+                nextBtn.click();
+                return { finished: false, reason: "Clicked next" };
             });
 
-            if (isDisabled) {
-                console.log('Last page reached.');
-                hasNextPage = false;
-            } else {
-                // C. Click Next
-                await page.evaluate(() => document.querySelector('#nextBtn').click());
-                
-                // D. Wait for new rows to load
-                await page.waitForFunction(() => {
-                    const rows = document.querySelectorAll('#tableBody > div, #tableBody > tr');
-                    return rows.length > 0;
-                }, { timeout: 10000 });
-                
-                await new Promise(r => setTimeout(r, 500)); 
-                pageNum++;
+            if (navigationResult.finished) {
+                console.log(`Finished: ${navigationResult.reason}`);
+                break;
             }
+
+            // D. Wait for the page number to CHANGE
+            // This is the crucial step to prevent infinite loops
+            try {
+                await page.waitForFunction(
+                    (prevStatus) => {
+                        const info = document.querySelector('#pageInfo');
+                        if(!info) return false;
+                        return info.innerText !== prevStatus;
+                    },
+                    { timeout: 5000 }, 
+                    pageStatus
+                );
+                // Small buffer for data to load
+                await new Promise(r => setTimeout(r, 1000)); 
+            } catch (e) {
+                console.log("Page did not change after clicking Next. Assuming end.");
+                break;
+            }
+        }
+
+        if (safetyCounter >= MAX_PAGES) {
+            console.log(`Warning: Reached safety limit of ${MAX_PAGES} pages.`);
         }
 
         console.log(`Scraping finished. Total results: ${allResults.length}`);
