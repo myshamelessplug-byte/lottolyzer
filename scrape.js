@@ -4,40 +4,50 @@ const fs = require('fs');
 async function scrapeData() {
     console.log('Launching browser...');
     
-    // Launch browser
     const browser = await puppeteer.launch({
         headless: 'new',
-        args: ['--no-sandbox', '--disable-setuid-sandbox'] // Required for GitHub Actions
+        args: ['--no-sandbox', '--disable-setuid-sandbox']
     });
     
     const page = await browser.newPage();
     
-    // Go to the site
     console.log('Navigating to site...');
     await page.goto('https://www.lottong-pinoy.com/', { waitUntil: 'networkidle2' });
 
     try {
-        // 1. Wait for the table body to be present (even if empty initially)
-        // We wait for the container to ensure the page structure is loaded
-        await page.waitForSelector('#tableBody', { timeout: 5000 });
-        
-        // 2. Click "Fetch Results"
+        // --- FIX: UNHIDE THE SECTION ---
+        // The HTML you provided had 'hidden' on the section. We remove it using JavaScript.
+        console.log('Forcing History section to be visible...');
+        await page.evaluate(() => {
+            const section = document.querySelector('#section-history');
+            if (section) {
+                section.classList.remove('hidden');
+            }
+        });
+        // --------------------------------
+
+        // Now wait for the button to be visible
+        console.log('Waiting for button...');
+        await page.waitForSelector('#searchBtn', { visible: true, timeout: 5000 });
+
+        // Click "Fetch Results"
         console.log('Clicking Fetch Results...');
         await page.click('#searchBtn');
 
-        // 3. Wait for rows to appear (Timeout 15 seconds)
-        console.log('Waiting for results to load...');
+        // Wait for rows to appear
+        console.log('Waiting for table rows...');
         await page.waitForSelector('#tableBody tr', { timeout: 15000 });
         
     } catch (error) {
-        console.log('Warning: Could not find results rows or button. The site might have changed or no results found.');
-        console.log(error);
-        // Close browser and exit if no data found
+        console.log('Error during interaction: ' + error.message);
+        // Take a screenshot if it fails so we can see what happened
+        await page.screenshot({ path: 'error_debug.png' });
+        console.log('Saved screenshot to error_debug.png for debugging.');
         await browser.close();
         return;
     }
 
-    // 4. Extract Data
+    // Extract Data
     const results = await page.evaluate(() => {
         const rows = document.querySelectorAll('#tableBody tr');
         const data = [];
@@ -58,12 +68,11 @@ async function scrapeData() {
 
     console.log(`Scraped ${results.length} results.`);
 
-    // 5. Save to JSON
     if (results.length > 0) {
         fs.writeFileSync('data/results.json', JSON.stringify(results, null, 2));
         console.log('Data saved to data/results.json');
     } else {
-        console.log('No data extracted.');
+        console.log('No data extracted. The table might be empty.');
     }
 
     await browser.close();
