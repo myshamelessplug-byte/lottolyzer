@@ -22,7 +22,8 @@ async function scrapeData() {
     });
 
     console.log('Navigating to site...');
-    await page.goto('https://www.lottong-pinong.com/', { 
+    // FIX: Corrected URL spelling
+    await page.goto('https://www.lottong-pinoy.com/', { 
         waitUntil: 'domcontentloaded',
         timeout: 60000 
     });
@@ -53,14 +54,13 @@ async function scrapeData() {
         });
 
         // 4. Select "From" Date (Earliest Available)
-        // We select the last option in the Year dropdown to get the earliest year.
         console.log('Selecting date range...');
         await page.evaluate(() => {
             // Set FROM Year to the last option (e.g., 2016)
             const fromYearSelect = document.querySelector('#fromYearSelect');
             const options = fromYearSelect.querySelectorAll('option');
             if (options.length > 0) {
-                const earliestYear = options[options.length - 1].value; // Last option usually earliest
+                const earliestYear = options[options.length - 1].value;
                 fromYearSelect.value = earliestYear;
                 fromYearSelect.dispatchEvent(new Event('change', { bubbles: true }));
             }
@@ -118,14 +118,21 @@ async function scrapeData() {
             // B. Check if Next Page exists
             const isDisabled = await page.evaluate(() => {
                 const nextBtn = document.querySelector('#nextBtn');
-                // Check if button is disabled (logic might vary by site, usually a class or attribute)
-                // The HTML snippet didn't show a disabled class, so we check the PageInfo text
-                const pageInfo = document.querySelector('#pageInfo').innerText; // e.g., "Page 1 / 5"
-                const parts = pageInfo.split('/');
-                const current = parseInt(parts[0].replace('Page', '').trim());
-                const total = parseInt(parts[1].trim());
+                // Check if button is disabled
+                if (nextBtn.classList.contains('disabled') || nextBtn.hasAttribute('disabled')) return true;
                 
-                return current >= total;
+                // Check Page Info text
+                const pageInfo = document.querySelector('#pageInfo');
+                if (pageInfo) {
+                    const text = pageInfo.innerText; // e.g., "Page 1 / 5"
+                    const parts = text.split('/');
+                    if (parts.length === 2) {
+                        const current = parseInt(parts[0].replace('Page', '').trim());
+                        const total = parseInt(parts[1].trim());
+                        return current >= total;
+                    }
+                }
+                return true; // Safety stop
             });
 
             if (isDisabled) {
@@ -136,13 +143,11 @@ async function scrapeData() {
                 await page.evaluate(() => document.querySelector('#nextBtn').click());
                 
                 // D. Wait for new rows to load
-                // We wait for the number of rows to be greater than 0 again
                 await page.waitForFunction(() => {
                     const rows = document.querySelectorAll('#tableBody > div, #tableBody > tr');
                     return rows.length > 0;
                 }, { timeout: 10000 });
                 
-                // Small delay to ensure data rendered
                 await new Promise(r => setTimeout(r, 500)); 
                 pageNum++;
             }
