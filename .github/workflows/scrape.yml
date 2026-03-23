@@ -2,13 +2,17 @@ name: Scrape Lotto Data
 
 on:
   schedule:
-    - cron: '0 6 * * *' # Runs every day at 6:00 AM UTC
-  workflow_dispatch: # Allows you to run this manually from the Actions tab
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+
+# ADD THIS SECTION ▼
+permissions:
+  contents: write
+# ------------------
 
 jobs:
   scrape:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout repo
         uses: actions/checkout@v3
