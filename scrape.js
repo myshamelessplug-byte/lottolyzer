@@ -11,6 +11,7 @@ async function scrapeData() {
     
     const page = await browser.newPage();
     
+    // Block resources to speed up
     await page.setRequestInterception(true);
     page.on('request', (req) => {
         if (['image', 'stylesheet', 'font'].includes(req.resourceType())) {
@@ -27,39 +28,59 @@ async function scrapeData() {
     });
 
     try {
-        // 1. Force History section visible
+        // 1. Wait for the page to be fully interactive (Frameworks like Alpine/Vue need time)
+        console.log('Waiting for page hydration...');
+        await new Promise(r => setTimeout(r, 3000)); 
+
+        // 2. Force History section visibility
         console.log('Forcing History section visibility...');
         await page.evaluate(() => {
             const section = document.querySelector('#section-history');
             if (section) section.classList.remove('hidden');
         });
 
-        // 2. Select Game using evaluate (THE FIX)
-        console.log('Selecting game manually...');
-        await page.evaluate(() => {
-            const selectElement = document.querySelector('#gameSelect');
-            selectElement.value = '6/55'; // Set the value directly
+        // 3. Robust Selection Method
+        console.log('Selecting game...');
+        const selectedValue = await page.evaluate(() => {
+            const select = document.querySelector('#gameSelect');
+            const option = select.querySelector('option[value="6/55"]');
             
-            // Create and dispatch the 'change' event so the site knows it changed
-            const event = new Event('change', { bubbles: true });
-            selectElement.dispatchEvent(event);
+            if (option) {
+                // 1. Mark the option as selected
+                option.selected = true;
+                
+                // 2. Update the select's value
+                select.value = '6/55';
+                
+                // 3. Fire BOTH 'input' and 'change' events (Framework friendly)
+                select.dispatchEvent(new Event('input', { bubbles: true }));
+                select.dispatchEvent(new Event('change', { bubbles: true }));
+                
+                return select.value;
+            }
+            return null;
         });
 
-        // Verify selection
-        const currentVal = await page.evaluate(() => document.querySelector('#gameSelect').value);
-        console.log(`Current game selection confirmed: ${currentVal}`);
+        console.log(`Attempted to select. Current value: ${selectedValue}`);
 
-        // 3. Click Search Button via evaluate (More reliable)
+        // If selection failed to stick, we try a fallback
+        if (selectedValue !== '6/55') {
+             console.log('Value did not stick, trying fallback...');
+             // Fallback: Puppeteer's native select
+             await page.select('#gameSelect', '6/55');
+        }
+
+        // 4. Click Search Button
         console.log('Clicking Fetch Results...');
         await page.evaluate(() => {
             document.querySelector('#searchBtn').click();
         });
 
-        // 4. Wait for results
+        // 5. Wait for results
         console.log('Waiting for results...');
         await page.waitForFunction(
             () => !document.querySelector('#tableBody').innerText.includes('Click "Fetch Results"'),
-            { timeout: 20000 }
+            { timeout: 25000 } // Increased timeout slightly
         );
         console.log('Results loaded.');
 
@@ -67,14 +88,18 @@ async function scrapeData() {
         console.log('Error: ' + error.message);
         await page.screenshot({ path: 'error_debug.png' });
         
+        // DEBUG: What is in the dropdown?
+        const debugVal = await page.evaluate(() => document.querySelector('#gameSelect').value);
+        console.log(`DEBUG: Final Select Value = ${debugVal}`);
+
         const tableText = await page.evaluate(() => document.querySelector('#tableBody').innerText);
-        console.log(`DEBUG Table Text: ${tableText}`);
+        console.log(`DEBUG: Table Text = ${tableText}`);
         
         await browser.close();
         return;
     }
 
-    // 5. Extract Data
+    // 6. Extract Data
     const results = await page.evaluate(() => {
         const container = document.querySelector('#tableBody');
         const rows = container.children;
