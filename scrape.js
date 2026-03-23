@@ -15,8 +15,7 @@ async function scrapeData() {
     await page.goto('https://www.lottong-pinoy.com/', { waitUntil: 'networkidle2' });
 
     try {
-        // --- FIX: UNHIDE THE SECTION ---
-        // The HTML you provided had 'hidden' on the section. We remove it using JavaScript.
+        // 1. Force History section to be visible
         console.log('Forcing History section to be visible...');
         await page.evaluate(() => {
             const section = document.querySelector('#section-history');
@@ -24,42 +23,60 @@ async function scrapeData() {
                 section.classList.remove('hidden');
             }
         });
-        // --------------------------------
 
-        // Now wait for the button to be visible
+        // 2. Wait for and Click "Fetch Results"
         console.log('Waiting for button...');
         await page.waitForSelector('#searchBtn', { visible: true, timeout: 5000 });
-
-        // Click "Fetch Results"
+        
         console.log('Clicking Fetch Results...');
         await page.click('#searchBtn');
 
-        // Wait for rows to appear
-        console.log('Waiting for table rows...');
-        await page.waitForSelector('#tableBody tr', { timeout: 15000 });
+        // 3. Wait for results
+        // FIX: The site uses DIVs, not TRs. We wait for a div inside tableBody.
+        // We also wait for the 'p' tag (placeholder) to disappear or check for content.
+        console.log('Waiting for data to load...');
+        
+        // We wait for the "grid" div which represents a row to appear
+        await page.waitForSelector('#tableBody > div', { timeout: 15000 });
         
     } catch (error) {
         console.log('Error during interaction: ' + error.message);
-        // Take a screenshot if it fails so we can see what happened
         await page.screenshot({ path: 'error_debug.png' });
         console.log('Saved screenshot to error_debug.png for debugging.');
         await browser.close();
         return;
     }
 
-    // Extract Data
+    // 4. Extract Data
     const results = await page.evaluate(() => {
-        const rows = document.querySelectorAll('#tableBody tr');
+        // Select the direct children divs (the rows)
+        const rows = document.querySelectorAll('#tableBody > div');
         const data = [];
 
         rows.forEach(row => {
-            const cells = row.querySelectorAll('td');
+            // In a grid layout, often the direct children are the cells
+            // The HTML showed: <div class="grid grid-cols-12...">
+            // So we look for the inner divs
+            const cells = row.querySelectorAll('div');
+            
+            // Based on your HTML: 
+            // Col 1: Date, Col 2: Combination, Col 3: Prize, Col 4: Winners
+            // Note: Grid layouts can be tricky. We check if we have enough cells.
+            
             if (cells.length >= 4) {
+                // Sometimes the first cell is empty or acts as a spacer, 
+                // but usually in this framework the data is direct.
+                // Let's try to map them safely.
+                
+                // Helper to get text
+                const getText = (el) => el ? el.innerText.trim() : '';
+
                 data.push({
-                    date: cells[0].innerText.trim(),
-                    combination: cells[1].innerText.trim(),
-                    prize: cells[2].innerText.trim(),
-                    winners: cells[3].innerText.trim()
+                    // Adjust indices if needed based on the actual grid columns
+                    date: getText(cells[0]),
+                    combination: getText(cells[1]),
+                    prize: getText(cells[2]),
+                    winners: getText(cells[3])
                 });
             }
         });
@@ -72,7 +89,7 @@ async function scrapeData() {
         fs.writeFileSync('data/results.json', JSON.stringify(results, null, 2));
         console.log('Data saved to data/results.json');
     } else {
-        console.log('No data extracted. The table might be empty.');
+        console.log('No data extracted. Check if site structure matches selectors.');
     }
 
     await browser.close();
