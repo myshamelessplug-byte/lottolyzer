@@ -11,7 +11,7 @@ async function scrapeData() {
     
     const page = await browser.newPage();
     
-    // Block resources to speed up loading
+    // Block images/fonts to speed up loading
     await page.setRequestInterception(true);
     page.on('request', (req) => {
         if (['image', 'stylesheet', 'font'].includes(req.resourceType())) {
@@ -28,56 +28,69 @@ async function scrapeData() {
     });
 
     try {
-        // 1. Force History section visible
-        console.log('Forcing History section to be visible...');
+        // 1. Force History section to be visible
+        console.log('Forcing History section visibility...');
         await page.evaluate(() => {
             const section = document.querySelector('#section-history');
             if (section) section.classList.remove('hidden');
         });
 
-        // 2. Click the button using JavaScript evaluation (more reliable than .click())
-        console.log('Clicking Fetch Results via JS...');
-        await page.evaluate(() => {
-            document.querySelector('#searchBtn').click();
-        });
+        // 2. Interact with the Form
+        console.log('Filling out form...');
 
-        // 3. Wait for the "Loading..." or placeholder text to disappear
-        // We wait until the #tableBody does NOT contain the text "Click"
-        console.log('Waiting for data to populate...');
+        // Wait for the Game Select dropdown
+        await page.waitForSelector('#gameSelect', { visible: true, timeout: 5000 });
+
+        // Select a specific game. 
+        // Options from your HTML: '6/58', '6/55', '6/49', '6/45', '6/42'
+        // Let's pick '6/55' (Grand Lotto) as an example.
+        await page.select('#gameSelect', '6/55');
+        console.log('Selected Game: Grand Lotto 6/55');
+
+        // Optional: If you want to select "Digit Game", you would do:
+        // await page.click('input[name="catRadio"][value="digit"]');
+        // await page.waitForSelector('#scheduleContainer', { visible: true });
+
+        // 3. Click the Search Button
+        console.log('Clicking Fetch Results...');
+        await page.click('#searchBtn');
+
+        // 4. Wait for results to load
+        // We wait for the placeholder text "Click Fetch Results" to disappear
+        console.log('Waiting for results...');
         await page.waitForFunction(
             () => !document.querySelector('#tableBody').innerText.includes('Click "Fetch Results"'),
             { timeout: 20000 }
         );
-        console.log('Data loaded.');
+        console.log('Results loaded.');
 
     } catch (error) {
-        console.log('Error during interaction: ' + error.message);
+        console.log('Error: ' + error.message);
         await page.screenshot({ path: 'error_debug.png' });
-        console.log('Saved screenshot to error_debug.png for debugging.');
         
-        // Dump HTML for debugging if it fails
-        const html = await page.evaluate(() => document.querySelector('#tableBody').innerHTML);
-        console.log("Current Table Body Content: " + html);
+        // Log the current state of the form for debugging
+        const selectedGame = await page.evaluate(() => document.querySelector('#gameSelect').value);
+        console.log(`Current selected game value: ${selectedGame}`);
         
+        const tableText = await page.evaluate(() => document.querySelector('#tableBody').innerText);
+        console.log(`Table Body Text: ${tableText}`);
+
         await browser.close();
         return;
     }
 
-    // 4. Extract Data
+    // 5. Extract Data
     const results = await page.evaluate(() => {
         const container = document.querySelector('#tableBody');
-        // We grab all direct children regardless of tag (tr, div, etc)
-        const rows = container.children; 
+        const rows = container.children; // Gets all direct children (tr or div)
         const data = [];
 
         for (let row of rows) {
-            // Get all cells (td or div)
             const cells = row.querySelectorAll('td, div');
             
             if (cells.length >= 4) {
                 const getText = (el) => el ? el.innerText.trim() : '';
                 
-                // Simple mapping: usually Date, Combo, Prize, Winners
                 data.push({
                     date: getText(cells[0]),
                     combination: getText(cells[1]),
@@ -95,7 +108,7 @@ async function scrapeData() {
         fs.writeFileSync('data/results.json', JSON.stringify(results, null, 2));
         console.log('Data saved to data/results.json');
     } else {
-        console.log('No data extracted. Check logs.');
+        console.log('No data extracted.');
     }
 
     await browser.close();
